@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Gabriel H. Barnard <gabriel.h.barnard@vanderbilt.edu>"]
 edition ="2021"
 description = "This crate help with parsing data from .mid files and returns a format compatible with netsblox."
+license-file = "license.txt"
+repository = "https://github.com/gb0808/beatblox_midi"
 
 [dependencies]
 midly = "0.5.3"
