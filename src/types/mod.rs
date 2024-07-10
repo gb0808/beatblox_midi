@@ -1,11 +1,13 @@
 use num_traits;
 
+/// An array containing the beat lengths for all possible note durations.
 pub const POSSIBLE_NOTE_LENGTHS: [f32; 21] = [
     0.0625, 0.09375, 0.109375, 0.125, 0.1875, 0.21875, 
     0.25, 0.375, 0.4375, 0.5, 0.75, 0.875, 1.0, 1.5, 
     1.75, 2.0, 3.0, 3.5, 4.0, 6.0, 7.0
 ];
 
+/// Represents a note duration.
 #[derive(Clone, PartialEq, Eq)]
 pub enum NoteDuration { 
     WHOLE, 
@@ -18,6 +20,7 @@ pub enum NoteDuration {
     NaN,
 }
 
+/// Modifiers that may be added onto a note duration.
 #[derive(Clone)]
 pub enum NoteDurationModifier {
     None,
@@ -25,12 +28,16 @@ pub enum NoteDurationModifier {
     DoubleDotted,
 }
 
+/// Represents the content of a midi track.
 #[derive(Clone)]
 pub struct Track {
+    /// The name of the track.
     pub name: String,
+    /// A vector of all the notes played in the track.
     pub notes: Vec<NoteWrapper>
 }
 
+/// A wrapper for a musical note.
 #[derive(Clone)]
 pub enum NoteWrapper {
     PlainNote(Note),
@@ -38,11 +45,13 @@ pub enum NoteWrapper {
     Rest(Note),
 }
 
+/// Simulates a beatblox modifier being placed on a note.
 #[derive(Clone)]
 pub enum NoteModifier {
     TiedNote(Vec<NoteWrapper>),
 }
 
+/// The basic representation of a note.
 #[derive(Clone)]
 pub struct Note {
     pub value: u8,
@@ -50,13 +59,20 @@ pub struct Note {
     pub velocity: u8,
 }
 
+/// A musical time signature.
 #[derive(Clone, Copy)]
 pub struct TimeSignature {
+    /// The number of beats in a measure.
     pub beat_count: u8,
+    /// The beat division.
     pub beat_type: u8,
+    /// The time at which the time signature first occurs in the piece.
+    /// 
+    /// This allows for the handling of time signature changes.
     pub time_of_occurance: u32,
 }
 
+/// Maps a raw beat value to a `NoteDuration`. 
 pub fn beat_type_map(beats: f32, beat_type: f32) -> (NoteDuration, NoteDurationModifier) {
     match beats * num_traits::pow(beat_type, 2) {
         112.0 => return (NoteDuration::WHOLE, NoteDurationModifier::DoubleDotted),
@@ -84,6 +100,7 @@ pub fn beat_type_map(beats: f32, beat_type: f32) -> (NoteDuration, NoteDurationM
     }
 }
 
+/// A helper function to create a `NoteWrapper` object.
 pub fn note_wrapper_builder(
     value: u8, duration: (NoteDuration, NoteDurationModifier), velocity: u8) -> NoteWrapper {
     if value == 255 {
@@ -92,6 +109,7 @@ pub fn note_wrapper_builder(
     return NoteWrapper::PlainNote(Note {value: value, duration: duration, velocity: velocity});
 }
 
+/// Pretty prints a `NoteWrapper` object.
 pub fn print_note_wrapper(note: &NoteWrapper) {
     match note {
         NoteWrapper::PlainNote(n) => {
@@ -115,6 +133,7 @@ pub fn print_note_wrapper(note: &NoteWrapper) {
     }
 }
 
+/// Converts a `NoteDuration` to a `&str`.
 fn note_duration_str(note_duration: &NoteDuration) -> &str {
     match note_duration {
         NoteDuration::WHOLE => return "whole note",
@@ -128,6 +147,7 @@ fn note_duration_str(note_duration: &NoteDuration) -> &str {
     }
 }
 
+/// Converts a `NoteDurationModifier` to a `&str`.
 fn note_duration_mod_str(note_duration_modifier: &NoteDurationModifier) -> &str {
     match note_duration_modifier {
         NoteDurationModifier::None => return "none",

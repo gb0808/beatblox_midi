@@ -2,12 +2,14 @@ use super::Midi;
 use super::types;
 use num_traits;
 
+/// Represents a raw note data taken from the midi file.
 struct RawNoteData {
     value: u8,
     beats: f32,
     velocity: u8,
 }
 
+/// Gets the number of ticks in each beat.
 pub fn get_ticks_per_beat(header: &midly::Header) -> f32 {
     let midly::Header { format: _, timing } = header;
     if let midly::Timing::Metrical(x) = timing {
@@ -17,6 +19,7 @@ pub fn get_ticks_per_beat(header: &midly::Header) -> f32 {
     panic!("Timing format not supported");
 }
 
+/// Gets the tempo of a midi file.
 pub fn get_bpm(track: &Vec<midly::TrackEvent>) -> u32 {
     for event in track {
         if let midly::TrackEventKind::Meta(midly::MetaMessage::Tempo(tempo)) = event.kind {
@@ -27,6 +30,7 @@ pub fn get_bpm(track: &Vec<midly::TrackEvent>) -> u32 {
     return 0;
 }
 
+/// Returns all time signatures in the midi file.
 pub fn get_time_signature(track: &Vec<midly::TrackEvent>) -> Vec<types::TimeSignature> {
     let mut time_signatures: Vec<types::TimeSignature> = Vec::new();
     let mut cur_time: u32 = 0;
@@ -46,6 +50,11 @@ pub fn get_time_signature(track: &Vec<midly::TrackEvent>) -> Vec<types::TimeSign
     return time_signatures;
 }
 
+/// Loads all the tracks in a midi file.
+/// 
+/// `midi` holds the newly created `Midi` object.
+/// 
+/// `smf` holds the `midly::Smf` object being used to parse through the midi file.
 pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf) {
     let tmp = midi.clone();
     for track in &smf.tracks {
@@ -53,6 +62,7 @@ pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf) {
     }
 }
 
+/// A helper function to build the `Track Object`.
 fn parse_track(midi: &Midi, track: &Vec<midly::TrackEvent>) -> types::Track {
     types::Track { 
         name: get_name(track), 
@@ -60,6 +70,7 @@ fn parse_track(midi: &Midi, track: &Vec<midly::TrackEvent>) -> types::Track {
     }
 }
 
+/// Gets the name of a midi track.
 fn get_name(track: &Vec<midly::TrackEvent>) -> String {
     for event in track {
         if let midly::TrackEventKind::Meta(midly::MetaMessage::InstrumentName(s)) = event.kind {
@@ -70,6 +81,9 @@ fn get_name(track: &Vec<midly::TrackEvent>) -> String {
     return String::from("");
 }
 
+/// Gets all the notes in a midi track. 
+/// 
+/// Does this by formatting the raw midi data.
 fn get_notes(midi: &Midi, track: &Vec<midly::TrackEvent>) -> Vec<types::NoteWrapper> {
     let mut notes = Vec::new();
     let raw_note_data = get_raw_note_data(track, midi.ticks_per_beat);
@@ -88,6 +102,7 @@ fn get_notes(midi: &Midi, track: &Vec<midly::TrackEvent>) -> Vec<types::NoteWrap
     return notes;
 }
 
+/// Gets the raw note data in a midi track.
 fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec<RawNoteData> {
     let mut status: bool = false;
     let mut cur_note_value: u8 = 0;
@@ -132,6 +147,7 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
     return data;
 }
 
+/// Returns tied note.
 fn get_tied_note(note: RawNoteData, beat_type: f32) -> types::NoteModifier {
     let mut notes: Vec<types::NoteWrapper> = Vec::new();
     let mut remaining_beats: f32 = note.beats;
@@ -144,6 +160,7 @@ fn get_tied_note(note: RawNoteData, beat_type: f32) -> types::NoteModifier {
     return types::NoteModifier::TiedNote(notes);
 }
 
+/// A helper function for parsing tied notes.
 fn get_nested_beat_value(beats: f32) -> f32 {
     for i in 1..types::POSSIBLE_NOTE_LENGTHS.len() {
         if types::POSSIBLE_NOTE_LENGTHS[i] > beats {
