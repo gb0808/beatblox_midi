@@ -106,6 +106,7 @@ fn get_notes(midi: &Midi, track: &Vec<midly::TrackEvent>) -> Vec<types::NoteWrap
 fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec<RawNoteData> {
     let mut status: bool = false;
     let mut cur_note_value: u8 = 0;
+    let mut cur_velocity: u8 = 0;
     let mut cur_time: u32 = 0;
     let mut note_on_time: u32 = 0;
     let mut note_off_time: u32 = 0;
@@ -116,8 +117,9 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
         cur_time += delta_t;
 
         if let midly::TrackEventKind::Midi { channel: _, message } = event.kind {
-            if let midly::MidiMessage::NoteOn {key, vel: _ } = message {
+            if let midly::MidiMessage::NoteOn {key, vel } = message {
                 if status == false {
+                    cur_velocity = vel.into();
                     cur_note_value = key.into();
                     note_on_time = cur_time;
                     status = true;
@@ -135,7 +137,7 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
                     data.push(RawNoteData { 
                         value: cur_note_value, 
                         beats: (cur_time - note_on_time) as f32 / ticks_per_beat,
-                        velocity: 0,
+                        velocity: cur_velocity,
                     });
                     note_off_time = cur_time;
                     status = false;

@@ -115,12 +115,14 @@ pub fn print_note_wrapper(note: &NoteWrapper) {
         NoteWrapper::PlainNote(n) => {
             let duration_str = note_duration_str(&n.duration.0);
             let mod_str = note_duration_mod_str(&n.duration.1);
-            println!("Note: {} for duration {} + {}", n.value, duration_str, mod_str);
+            print!("Note: {} | ", n.value);
+            print!("Duration: {} {} | ", mod_str, duration_str);
+            println!("Velocity: {}", n.velocity);
         },
         NoteWrapper::Rest(r) => {
             let duration_str = note_duration_str(&r.duration.0);
             let mod_str = note_duration_mod_str(&r.duration.1);
-             println!("Rest for duration {} + {}", duration_str, mod_str);
+            println!("Rest | Duration:{} {}", mod_str, duration_str);
         },
         NoteWrapper::ModifiedNote(v) => {
             let NoteModifier::TiedNote(t) = v;
@@ -150,7 +152,7 @@ fn note_duration_str(note_duration: &NoteDuration) -> &str {
 /// Converts a `NoteDurationModifier` to a `&str`.
 fn note_duration_mod_str(note_duration_modifier: &NoteDurationModifier) -> &str {
     match note_duration_modifier {
-        NoteDurationModifier::None => return "none",
+        NoteDurationModifier::None => return "",
         NoteDurationModifier::Dotted => return "dotted",
         NoteDurationModifier::DoubleDotted => return "double dotted",
     }

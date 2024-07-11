@@ -4,7 +4,6 @@ use std::fs;
 mod parsing;
 mod types;
 
-
 /// The Midi structure is a netsblox-friendly representation of the parsed midi file.
 #[derive(Clone)]
 pub struct Midi {
