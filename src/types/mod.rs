@@ -1,4 +1,55 @@
-use num_traits;
+pub trait Util {
+    fn to_float(&self) -> f32;
+
+    fn cmp(&self, b: &Self) -> f32;
+
+    fn get_overflow(&self, precesion: &Self) -> PrecisionOverflow;
+}
+
+/// A type alias to help with readability.
+pub type DurationType = (NoteDuration, NoteDurationModifier);
+
+/// A container for helping with parsing notes with a precision value. The first item is the 
+/// clipped note duration and the second value is the overflow duration.
+pub type PrecisionOverflow = (f32, f32);
+
+impl Util for DurationType {
+    /// Converts a note duration to a float in order to help with comparison.
+    fn to_float(&self) -> f32 {
+        let mut duration_mod: f32 = 1.0;
+        if self.1 == NoteDurationModifier::Dotted {
+            duration_mod = 1.5;
+        } else if self.1 == NoteDurationModifier::DoubleDotted {
+            duration_mod = 1.75;
+        }
+        
+        match self.0 {
+            NoteDuration::WHOLE => return 64.0 * duration_mod,
+            NoteDuration::HALF => return 32.0 * duration_mod,
+            NoteDuration::QUARTER => return 16.0 * duration_mod,
+            NoteDuration::EIGHTH => return 8.0 * duration_mod,
+            NoteDuration::SIXTEENTH => return 4.0 * duration_mod,
+            NoteDuration::THIRTYSECOND => return 2.0 * duration_mod,
+            NoteDuration::SIXTYFOURTH => return 1.0 * duration_mod,
+            NoteDuration::NaN => return 0.0,
+        }
+    }
+
+    /// Compares note durations.
+    /// 
+    /// Returns a positive number if `self` is greater than `b`. Returns a negative number 
+    /// if `self` is less than `b`. Returns zero if `self` is equivalent to `b`.
+    fn cmp(&self, b: &DurationType) -> f32 {
+        return self.to_float() - b.to_float()
+    }
+
+    /// A helper function for parsing notes that can not be evenly divied into the note precision.
+    fn get_overflow(&self, precision: &DurationType) ->  PrecisionOverflow {
+        let cliped_note = self.to_float() as u16 / precision.to_float() as u16;
+        let overflow = self.to_float() % precision.to_float();
+        return (cliped_note as f32, overflow);
+    }
+}
 
 /// An array containing the beat lengths for all possible note durations.
 pub const POSSIBLE_NOTE_LENGTHS: [f32; 21] = [
@@ -21,7 +72,7 @@ pub enum NoteDuration {
 }
 
 /// Modifiers that may be added onto a note duration.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum NoteDurationModifier {
     None,
     Dotted,
@@ -49,13 +100,14 @@ pub enum NoteWrapper {
 #[derive(Clone)]
 pub enum NoteModifier {
     TiedNote(Vec<NoteWrapper>),
+    Chord(Vec<NoteWrapper>),
 }
 
 /// The basic representation of a note.
 #[derive(Clone)]
 pub struct Note {
     pub value: u8,
-    pub duration: (NoteDuration, NoteDurationModifier),
+    pub duration: DurationType,
     pub velocity: u8,
 }
 
@@ -73,7 +125,7 @@ pub struct TimeSignature {
 }
 
 /// Maps a raw beat value to a `NoteDuration`. 
-pub fn beat_type_map(beats: f32, beat_type: f32) -> (NoteDuration, NoteDurationModifier) {
+pub fn beat_type_map(beats: f32, beat_type: f32) -> DurationType {
     match beats * num_traits::pow(beat_type, 2) {
         112.0 => return (NoteDuration::WHOLE, NoteDurationModifier::DoubleDotted),
         96.0 => return (NoteDuration::WHOLE, NoteDurationModifier::Dotted),
@@ -101,8 +153,7 @@ pub fn beat_type_map(beats: f32, beat_type: f32) -> (NoteDuration, NoteDurationM
 }
 
 /// A helper function to create a `NoteWrapper` object.
-pub fn note_wrapper_builder(
-    value: u8, duration: (NoteDuration, NoteDurationModifier), velocity: u8) -> NoteWrapper {
+pub fn note_wrapper_builder(value: u8, duration: DurationType, velocity: u8) -> NoteWrapper {
     if value == 255 {
         return NoteWrapper::Rest(Note {value: value, duration: duration, velocity: velocity});
     }
@@ -125,12 +176,19 @@ pub fn print_note_wrapper(note: &NoteWrapper) {
             println!("Rest | Duration:{} {}", mod_str, duration_str);
         },
         NoteWrapper::ModifiedNote(v) => {
-            let NoteModifier::TiedNote(t) = v;
-            println!("====Tied Notes====");
-            for n in t { 
-                print_note_wrapper(n); 
+            if let NoteModifier::TiedNote(t) = v {
+                println!("====Tied Notes====");
+                for n in t { 
+                    print_note_wrapper(n); 
+                }
+                println!("==================");
+            } else if let NoteModifier::Chord(c) = v {
+                println!("====Chord====");
+                for n in c { 
+                    print_note_wrapper(n); 
+                }
+                println!("=============");
             }
-            println!("==================");
         },
     }
 }

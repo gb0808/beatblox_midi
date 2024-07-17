@@ -2,7 +2,7 @@ use midly::Smf;
 use std::fs;
 
 mod parsing;
-mod types;
+pub mod types;
 
 /// The Midi structure is a netsblox-friendly representation of the parsed midi file.
 #[derive(Clone)]
@@ -19,10 +19,20 @@ pub struct Midi {
 impl Midi {
     /// Parses through a midi file found at `dir` and returns a `Midi` object.
     pub fn parse(dir: String) -> Midi {
+        let precision = (types::NoteDuration::SIXTYFOURTH, types::NoteDurationModifier::None);
+        return Midi::parse_with_precision(dir, precision);
+    }
+
+    /// Parses through a midi file found at 'dir' and returns a `Midi` object.
+    /// 
+    /// The `precision` parameter allows the user to set the degree of precision they would like
+    /// when parsing. Any notes shorter than the value specified in the `precision` parameter
+    /// will be grouped as a chord.
+    pub fn parse_with_precision(dir: String, precision: types::DurationType) -> Midi {
         let contents = fs::read(dir).unwrap();
         let smf = Smf::parse(&contents).unwrap();
         let mut midi = Midi::new(&smf);
-        parsing::load_tracks(&mut midi, &smf);
+        parsing::load_tracks(&mut midi, &smf, &precision);
         return midi;
     }
 

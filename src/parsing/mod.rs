@@ -1,6 +1,7 @@
+use num_traits;
 use super::Midi;
 use super::types;
-use num_traits;
+use super::types::Util;
 
 /// Represents a raw note data taken from the midi file.
 struct RawNoteData {
@@ -55,18 +56,26 @@ pub fn get_time_signature(track: &Vec<midly::TrackEvent>) -> Vec<types::TimeSign
 /// `midi` holds the newly created `Midi` object.
 /// 
 /// `smf` holds the `midly::Smf` object being used to parse through the midi file.
-pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf) {
+/// 
+/// The `precision` parameter allows the user to set the degree of precision they would like
+/// when parsing. Any notes shorter than the value specified in the `precision` parameter
+/// will be grouped as a chord.
+pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf, precision: &types::DurationType) {
     let tmp = midi.clone();
     for track in &smf.tracks {
-        midi.tracks.push(parse_track(&tmp, track));
+        midi.tracks.push(parse_track(&tmp, track, precision));
     }
 }
 
 /// A helper function to build the `Track Object`.
-fn parse_track(midi: &Midi, track: &Vec<midly::TrackEvent>) -> types::Track {
+fn parse_track(
+    midi: &Midi, 
+    track: &Vec<midly::TrackEvent>, 
+    precision: &types::DurationType
+) -> types::Track {
     types::Track { 
         name: get_name(track), 
-        notes: get_notes(midi, track),
+        notes: get_notes(midi, track, precision),
     }
 }
 
@@ -84,18 +93,36 @@ fn get_name(track: &Vec<midly::TrackEvent>) -> String {
 /// Gets all the notes in a midi track. 
 /// 
 /// Does this by formatting the raw midi data.
-fn get_notes(midi: &Midi, track: &Vec<midly::TrackEvent>) -> Vec<types::NoteWrapper> {
+fn get_notes(
+    midi: &Midi, 
+    track: &Vec<midly::TrackEvent>, 
+    precision: &types::DurationType
+) -> Vec<types::NoteWrapper> {
     let mut notes = Vec::new();
+    let mut chord = Vec::new();
+    let mut beat_counter = 0.0;
     let raw_note_data = get_raw_note_data(track, midi.ticks_per_beat);
     let time_signature = midi.time_signatures[0];
+    let beat_type = types::beat_type_map(1.0, midi.time_signatures[0].beat_type as f32);
 
     for note in raw_note_data {
-        let duration_type = types::beat_type_map(note.beats, time_signature.beat_type as f32);
-        if duration_type.0 == types::NoteDuration::NaN {
-            let tied_note = get_tied_note(note, time_signature.beat_type as f32);
-            notes.push(types::NoteWrapper::ModifiedNote(tied_note));
+        let cur_duration = types::beat_type_map(note.beats, time_signature.beat_type as f32);
+        if beat_counter >= precision.to_float() {
+            notes.push(types::NoteWrapper::ModifiedNote(types::NoteModifier::Chord(chord)));
+            chord = Vec::new();
+            beat_counter -= precision.to_float();
+        } else if cur_duration.cmp(precision) < 0.0 {
+            let duration = precision.clone();
+            chord.push(types::note_wrapper_builder(note.value, duration, note.velocity));
+            beat_counter += note.beats;
+        } else if cur_duration.to_float() % precision.to_float() == 0.0 {
+            notes.push(types::note_wrapper_builder(note.value, cur_duration, note.velocity));
+        } else if cur_duration.0 == types::NoteDuration::NaN {
+            let tied_note = get_tied_note(&note, time_signature.beat_type as f32, precision);
+            notes.push(types::NoteWrapper::ModifiedNote(tied_note.0));
+            beat_counter += tied_note.1;
         } else {
-            notes.push(types::note_wrapper_builder(note.value, duration_type, note.velocity));
+            println!("How did we get hear?");
         }
     }
     
@@ -149,25 +176,34 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
     return data;
 }
 
-/// Returns tied note.
-fn get_tied_note(note: RawNoteData, beat_type: f32) -> types::NoteModifier {
+/// Returns a tuple with the fist value containing a `NoteModifier` and the second value containing
+/// the overflow. 
+fn get_tied_note(
+    note: &RawNoteData, 
+    beat_type: f32, 
+    precision: &types::DurationType
+) -> (types::NoteModifier, f32) {
+
     let mut notes: Vec<types::NoteWrapper> = Vec::new();
     let mut remaining_beats: f32 = note.beats;
-    while remaining_beats > 0.0 {
-        let nested_beat_value = get_nested_beat_value(remaining_beats);
+    let mut nested_beat_value = get_nested_beat_value(remaining_beats, precision);
+    while nested_beat_value != 0.0 {
         let new_duration = types::beat_type_map(nested_beat_value, beat_type as f32);
         remaining_beats -= nested_beat_value;
         notes.push(types::note_wrapper_builder(note.value, new_duration, note.velocity));
+        nested_beat_value = get_nested_beat_value(remaining_beats, precision);
     }
-    return types::NoteModifier::TiedNote(notes);
+    return (types::NoteModifier::TiedNote(notes), remaining_beats);
 }
 
 /// A helper function for parsing tied notes.
-fn get_nested_beat_value(beats: f32) -> f32 {
-    for i in 1..types::POSSIBLE_NOTE_LENGTHS.len() {
-        if types::POSSIBLE_NOTE_LENGTHS[i] > beats {
-            return types::POSSIBLE_NOTE_LENGTHS[i - 1];
+fn get_nested_beat_value(beats: f32, precision: &types::DurationType) -> f32 {
+    let mut nested_beat_value = 0.0;
+    for i in 0..types::POSSIBLE_NOTE_LENGTHS.len() {
+        let fit = types::POSSIBLE_NOTE_LENGTHS[i] % precision.to_float() == 0.0;
+        if types::POSSIBLE_NOTE_LENGTHS[i] < beats && fit {
+            nested_beat_value = types::POSSIBLE_NOTE_LENGTHS[i];
         }
     }
-    return types::POSSIBLE_NOTE_LENGTHS[types::POSSIBLE_NOTE_LENGTHS.len() - 1];
+    return nested_beat_value;
 }
