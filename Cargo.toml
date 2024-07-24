@@ -1,6 +1,6 @@
 [package]
 name = "beatblox_midi"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Gabriel H. Barnard <gabriel.h.barnard@vanderbilt.edu>"]
 edition ="2021"
 description = "This crate help with parsing data from .mid files and returns a format compatible with netsblox."
