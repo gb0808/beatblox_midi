@@ -22,7 +22,7 @@ pub struct Track {
 #[derive(Clone, Copy)]
 struct RawNoteData {
     value: u8,
-    beats: f32,
+    start_beat: f32,
     velocity: u8,
 }
 
@@ -111,80 +111,63 @@ fn get_notes(
     precision: &DurationType
 ) -> Vec<NoteWrapper> {
     let mut notes = Vec::new();
-    let mut chord_notes: Vec<NoteWrapper> = Vec::new();
-    let mut beat_marker = 0.0;
     let raw_note_data = get_raw_note_data(track, midi.ticks_per_beat);
     let beat_type = midi.time_signatures[0].beat_type;
-    let quantized_notes = quantize(&raw_note_data, precision, beat_type);
+    let precision_beats = precision.get_beat_count(beat_type);
+    let quantized_notes = quantize(&raw_note_data, precision_beats);
 
-    for note_data in quantized_notes {
-        if note_data.0 != beat_marker {
-            if chord_notes.len() == 1 {
-                notes.push(chord_notes[0].clone());
-            } else {
-                notes.push(NoteWrapper::ModifiedNote(NoteModifier::Chord(chord_notes)));
+    let mut cur_note: Vec<(u8, u8)> = Vec::new();
+    let mut beat_length = precision_beats;
+    for i in 0..quantized_notes.len() {
+        if quantized_notes[i].len() != 0 {
+            if cur_note.len() == 1 {
+                let value = cur_note[0].0;
+                let velocity = cur_note[0].1;
+                notes.push(parse_note_data((value, velocity), beat_length, beat_type));
+            } else if cur_note.len() != 0{
+                let mut chord = Vec::new();
+                for note_data in cur_note.clone() {
+                    let value = note_data.0;
+                    let velocity = note_data.1;
+                    chord.push(parse_note_data((value, velocity), beat_length, beat_type));
+                }
+                notes.push(NoteWrapper::ModifiedNote(NoteModifier::Chord(chord)));
             }
-            chord_notes = Vec::new();
-            beat_marker = note_data.0;
-        } 
-        chord_notes.push(note_data.1);
-    }   
+            cur_note = quantized_notes[i].clone();
+            beat_length = precision_beats;
+        } else {
+            beat_length += precision_beats;
+        }
+    }
     
     return notes;
 }
 
-fn quantize(
-    raw_note_data: &Vec<RawNoteData>, 
-    precision: &DurationType,
-    beat_type: u8
-) -> Vec<(f32, NoteWrapper)> {
-    let mut notes = Vec::new();
-    if raw_note_data.len() == 0 {
-        return notes;
+fn parse_note_data((value, velocity): (u8, u8), beat_length: f32, beat_type: u8) -> NoteWrapper {
+    let duration = DurationType::beat_type_map(beat_length, beat_type);
+    if duration.duration == NoteDuration::NaN {
+        return NoteWrapper::ModifiedNote(get_tied_note((value, beat_length, velocity), beat_type));
+    } else {
+        return NoteWrapper::build_note_wrapper(value, duration, velocity);
     }
-   
-    let mut cur_beat = 0.0;
-    let precision_beats = precision.get_beat_count(beat_type);
-    let mut cur_beat_marker = precision_beats;
-    let mut prev_beat_marker = 0.0;
-    let cur_note_index = 0;
-    let cur_note = raw_note_data[cur_note_index];
+}
 
+fn quantize(raw_note_data: &Vec<RawNoteData>, precision_beats: f32) -> Vec<Vec<(u8, u8)>> {
+    if raw_note_data.len() == 0 {
+        return Vec::new();
+    }
+    let total_precision_beats = get_total_precision_beats(raw_note_data, precision_beats);
+    let mut notes = vec![Vec::new(); total_precision_beats];
     for note in raw_note_data {
-        let value = note.value;
-        let duration = DurationType::beat_type_map(note.beats, beat_type);
-        let velocity = note.velocity;
-
-        if duration.duration == NoteDuration::NaN {
-            notes.push((
-                prev_beat_marker, 
-                NoteWrapper::ModifiedNote(get_tied_note(&cur_note, beat_type, precision)),
-            ));
-        } else {
-            notes.push((
-                prev_beat_marker, 
-                NoteWrapper::build_note_wrapper(
-                    value, duration.quantize(beat_type, precision_beats), velocity)
-            ));
-        }
-
-        cur_beat += note.beats;
-        if cur_beat >= cur_beat_marker {
-            prev_beat_marker = cur_beat_marker;
-        }
-        while cur_beat >= cur_beat_marker {
-            cur_beat_marker += precision_beats;
-        }
+        notes[(note.start_beat / precision_beats) as usize].push((note.value, note.velocity));
     }
     return notes;
 }
 
 /// Gets the raw note data in a midi track.
 fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec<RawNoteData> {
-    let mut status: bool = false;
-    let mut cur_note_value: u8 = 0;
-    let mut cur_velocity: u8 = 0;
     let mut cur_time: u32 = 0;
+    let mut cur_velocity: u8 = 0;
     let mut note_on_time: u32 = 0;
     let mut note_off_time: u32 = 0;
     let mut data: Vec<RawNoteData> = Vec::new();
@@ -194,31 +177,24 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
         cur_time += delta_t;
 
         if let midly::TrackEventKind::Midi { channel: _, message } = event.kind {
-            if let midly::MidiMessage::NoteOn {key, vel } = message {
-                if status == false {
-                    cur_velocity = vel.into();
-                    cur_note_value = key.into();
-                    note_on_time = cur_time;
-                    status = true;
-                    if note_on_time - note_off_time != 0 {
-                        data.push(RawNoteData { 
-                            value: 255, 
-                            beats: (note_on_time - note_off_time) as f32 / ticks_per_beat,
-                            velocity: 0,
-                        });
-                    }
-                } 
-            }
-            else if let midly::MidiMessage::NoteOff { key, vel: _ } = message {
-                if status == true && cur_note_value == key {
-                    data.push(RawNoteData { 
-                        value: cur_note_value, 
-                        beats: (cur_time - note_on_time) as f32 / ticks_per_beat,
-                        velocity: cur_velocity,
+            if let midly::MidiMessage::NoteOn {key: _, vel } = message {
+                cur_velocity = vel.into();
+                note_on_time = cur_time;
+                if note_on_time - note_off_time != 0 {
+                    data.push(RawNoteData {
+                        value: 255,
+                        start_beat: note_off_time as f32 / ticks_per_beat,
+                        velocity: 0,
                     });
-                    note_off_time = cur_time;
-                    status = false;
                 }
+            }
+            else if let midly::MidiMessage::NoteOff { key , vel: _ } = message {
+                data.push(RawNoteData {
+                    value: key.into(),
+                    start_beat: note_on_time as f32 / ticks_per_beat,
+                    velocity: cur_velocity,
+                });
+                note_off_time = cur_time;
             }
         }
     }
@@ -226,33 +202,35 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
     return data;
 }
 
-/// Returns a tuple with the fist value containing a `NoteModifier` and the second value containing
-/// the overflow. 
-fn get_tied_note(note: &RawNoteData, beat_type: u8, precision: &DurationType) -> NoteModifier {
-    let precision_beats = precision.get_beat_count(beat_type);
+fn get_total_precision_beats(raw_note_data: &Vec<RawNoteData>, precision_beats: f32) -> usize {
+    let total_beats = raw_note_data[raw_note_data.len() - 1].start_beat;
+    let mut total_precision_beats = 0;
+    let mut cur_beat = 0.0;
+    while cur_beat <= total_beats {
+        cur_beat += precision_beats;
+        total_precision_beats += 1;
+    }
+    return total_precision_beats;
+}
+
+fn get_tied_note((value, duration, velocity): (u8, f32, u8), beat_type: u8) -> NoteModifier {
     let mut notes: Vec<NoteWrapper> = Vec::new();
-    let mut remaining_beats: f32 = note.beats;
+    let mut remaining_beats: f32 = duration;
     while remaining_beats > 0.0 {
-        let nested_beat_value = get_nested_beat_value(remaining_beats, precision_beats);
+        let nested_beat_value = get_nested_beat_value(remaining_beats);
         let new_duration = DurationType::beat_type_map(nested_beat_value, beat_type);
         remaining_beats -= nested_beat_value;
-        notes.push(NoteWrapper::build_note_wrapper(
-            note.value, new_duration.quantize(beat_type, precision_beats), note.velocity));
-        if nested_beat_value == 0.0 {
-            break;
-        }
+        notes.push(NoteWrapper::build_note_wrapper(value, new_duration, velocity));
     }
     return NoteModifier::TiedNote(notes);
 }
 
 /// A helper function for parsing tied notes.
-fn get_nested_beat_value(beats: f32, precision_beats: f32) -> f32 {
-    let mut nested_beat_value = 0.0;
-    for i in 0..POSSIBLE_NOTE_LENGTHS.len() {
-        let fit = POSSIBLE_NOTE_LENGTHS[i] % precision_beats == 0.0;
-        if POSSIBLE_NOTE_LENGTHS[i] <= beats && fit {
-            nested_beat_value = POSSIBLE_NOTE_LENGTHS[i];
+fn get_nested_beat_value(beats: f32) -> f32 {
+    for i in 1..POSSIBLE_NOTE_LENGTHS.len() {
+        if POSSIBLE_NOTE_LENGTHS[i] > beats {
+            return POSSIBLE_NOTE_LENGTHS[i - 1];
         }
     }
-    return nested_beat_value;
+    return POSSIBLE_NOTE_LENGTHS[POSSIBLE_NOTE_LENGTHS.len() - 1];
 }
