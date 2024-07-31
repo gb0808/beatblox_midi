@@ -23,6 +23,7 @@ pub struct Track {
 struct RawNoteData {
     value: u8,
     start_beat: f32,
+    beats: f32,
     velocity: u8,
 }
 
@@ -120,18 +121,8 @@ fn get_notes(
     let mut beat_length = precision_beats;
     for i in 0..quantized_notes.len() {
         if quantized_notes[i].len() != 0 {
-            if cur_note.len() == 1 {
-                let value = cur_note[0].0;
-                let velocity = cur_note[0].1;
-                notes.push(parse_note_data((value, velocity), beat_length, beat_type));
-            } else if cur_note.len() != 0{
-                let mut chord = Vec::new();
-                for note_data in cur_note.clone() {
-                    let value = note_data.0;
-                    let velocity = note_data.1;
-                    chord.push(parse_note_data((value, velocity), beat_length, beat_type));
-                }
-                notes.push(NoteWrapper::ModifiedNote(NoteModifier::Chord(chord)));
+            if cur_note.len() != 0 {
+                notes.push(gen_wrapper(&cur_note, beat_length, beat_type));
             }
             cur_note = quantized_notes[i].clone();
             beat_length = precision_beats;
@@ -139,9 +130,31 @@ fn get_notes(
             beat_length += precision_beats;
         }
     }
+
+    if cur_note.len() != 0 {
+        notes.push(gen_wrapper(&cur_note, beat_length, beat_type));
+    }
     
     return notes;
 }
+
+fn gen_wrapper(cur_note: &Vec<(u8, u8)>, beat_length: f32, beat_type: u8) -> NoteWrapper {
+    let mut chord = Vec::new();
+    for note_data in cur_note {
+        let value = note_data.0;
+        let velocity = note_data.1;
+        if value != 255 { 
+            chord.push(parse_note_data((value, velocity), beat_length, beat_type));
+        }
+    }
+    if chord.len() == 0 {
+        let duration = DurationType::beat_type_map(beat_length, beat_type);
+        return NoteWrapper::build_note_wrapper(255, duration, 0);
+    } else if chord.len() == 1 {
+        return chord[0].clone();
+    }
+    return NoteWrapper::ModifiedNote(NoteModifier::Chord(chord));
+} 
 
 fn parse_note_data((value, velocity): (u8, u8), beat_length: f32, beat_type: u8) -> NoteWrapper {
     let duration = DurationType::beat_type_map(beat_length, beat_type);
@@ -159,7 +172,9 @@ fn quantize(raw_note_data: &Vec<RawNoteData>, precision_beats: f32) -> Vec<Vec<(
     let total_precision_beats = get_total_precision_beats(raw_note_data, precision_beats);
     let mut notes = vec![Vec::new(); total_precision_beats];
     for note in raw_note_data {
-        notes[(note.start_beat / precision_beats) as usize].push((note.value, note.velocity));
+        if note.beats >= 0.0625 {
+            notes[(note.start_beat / precision_beats) as usize].push((note.value, note.velocity));
+        }
     }
     return notes;
 }
@@ -184,6 +199,7 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
                     data.push(RawNoteData {
                         value: 255,
                         start_beat: note_off_time as f32 / ticks_per_beat,
+                        beats: (note_on_time - note_off_time) as f32 / ticks_per_beat,
                         velocity: 0,
                     });
                 }
@@ -192,6 +208,7 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
                 data.push(RawNoteData {
                     value: key.into(),
                     start_beat: note_on_time as f32 / ticks_per_beat,
+                    beats: (cur_time - note_on_time) as f32 / ticks_per_beat,
                     velocity: cur_velocity,
                 });
                 note_off_time = cur_time;
