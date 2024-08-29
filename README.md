@@ -24,3 +24,4 @@ handled.
 - [x] Precision param in Midi::parse
 - [x] Tuplet detection
 - [ ] Quarter / sixteenth note triplet detection
+- [ ] Handle time signature changes
