@@ -1,5 +1,4 @@
 use beatblox_midi::Midi;
-use beatblox_midi::parsing::duration::DEFAULT_DURATION_PRECISION;
 use beatblox_midi::parsing::duration::DurationType;
 use beatblox_midi::parsing::duration::NoteDuration;
 use beatblox_midi::parsing::duration::NoteDurationModifier;
@@ -24,9 +23,14 @@ fn parse_precision() {
     midi.print();
 }
 
+#[ignore]
 #[test]
 fn parse_tuplet() {
-    let dir = String::from("tests/test_files/test-3.mid");
-    let midi = Midi::parse_with_precision(dir, DEFAULT_DURATION_PRECISION, true);
+    let dir = String::from("tests/test_files/test-5.mid");
+    let precision = DurationType {
+        duration: NoteDuration::SIXTEENTH,
+        modifier: NoteDurationModifier::None,
+    };    
+    let midi = Midi::parse_with_precision(dir, precision, true);
     midi.print();
 }

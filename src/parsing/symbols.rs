@@ -54,6 +54,12 @@ impl NoteWrapper {
                         n.print(); 
                     }
                     println!("++++++++++++++++++");
+                } else if let NoteModifier::Triplet(tr) = v {
+                    println!("-----Triplet------");
+                    for n in tr { 
+                        n.print(); 
+                    }
+                    println!("------------------");
                 }
             },
         }
@@ -65,6 +71,7 @@ impl NoteWrapper {
 pub enum NoteModifier {
     TiedNote(Vec<NoteWrapper>),
     Chord(Vec<NoteWrapper>),
+    Triplet(Vec<NoteWrapper>),
 }
 
 /// The basic representation of a note.

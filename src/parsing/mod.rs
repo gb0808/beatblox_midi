@@ -8,6 +8,7 @@ use crate::parsing::duration::POSSIBLE_NOTE_LENGTHS;
 use crate::parsing::symbols::NoteModifier;
 use crate::parsing::symbols::NoteWrapper;
 use crate::parsing::symbols::TimeSignature;
+use std::collections::VecDeque;
 
 /// Represents the content of a midi track.
 #[derive(Clone)]
@@ -21,10 +22,9 @@ pub struct Track {
 /// Represents a raw note data taken from the midi file.
 #[derive(Clone, Copy)]
 struct RawNoteData {
-    value: u8,
-    start_beat: f32,
-    beats: f32,
-    velocity: u8,
+    key: u8,
+    onset: u32,
+    vel: u8,
 }
 
 /// Gets the number of ticks in each beat.
@@ -77,18 +77,26 @@ pub fn get_time_signature(track: &Vec<midly::TrackEvent>) -> Vec<TimeSignature> 
 /// The `precision` parameter allows the user to set the degree of precision they would like
 /// when parsing. Any notes shorter than the value specified in the `precision` parameter
 /// will be grouped as a chord.
-pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf, precision: &DurationType) {
+/// 
+/// The `triplet` parameter indicated if the user wants to scan for triplets. Scanning for
+/// triplets requires extra resources.
+pub fn load_tracks(midi: &mut Midi, smf: &midly::Smf, precision: &DurationType, triplet: bool) {
     let tmp = midi.clone();
     for track in &smf.tracks {
-        midi.tracks.push(parse_track(&tmp, track, precision));
+        midi.tracks.push(parse_track(&tmp, track, precision, triplet));
     }
 }
 
 /// A helper function to build the `Track Object`.
-fn parse_track(midi: &Midi, track: &Vec<midly::TrackEvent>, precision: &DurationType) -> Track {
+fn parse_track(
+    midi: &Midi, 
+    track: &Vec<midly::TrackEvent>, 
+    precision: &DurationType,
+    triplet: bool
+) -> Track {
     Track { 
         name: get_name(track), 
-        notes: get_notes(midi, track, precision),
+        notes: get_notes(midi, track, precision, triplet),
     }
 }
 
@@ -109,35 +117,120 @@ fn get_name(track: &Vec<midly::TrackEvent>) -> String {
 fn get_notes(
     midi: &Midi, 
     track: &Vec<midly::TrackEvent>, 
-    precision: &DurationType
+    precision: &DurationType,
+    triplet: bool
 ) -> Vec<NoteWrapper> {
-    let mut notes = Vec::new();
-    let raw_note_data = get_raw_note_data(track, midi.ticks_per_beat);
     let beat_type = midi.time_signatures[0].beat_type;
-    let precision_beats = precision.get_beat_count(beat_type);
-    let quantized_notes = quantize(&raw_note_data, precision_beats);
+    let precision_beat = precision.get_beat_count(beat_type);
+    let divisions = if triplet { 
+        4.0 / precision_beat / 2.0 * 1.5 
+    } else { 
+        1.0 / precision_beat
+    };
+    let quantized_note_data = quantize(midi, track, divisions);
 
-    let mut cur_note: Vec<(u8, u8)> = Vec::new();
-    let mut beat_length = precision_beats;
-    for i in 0..quantized_notes.len() {
-        if quantized_notes[i].len() != 0 {
-            if cur_note.len() != 0 {
-                notes.push(gen_wrapper(&cur_note, beat_length, beat_type));
+    let mut possible_triplets = VecDeque::new();
+    if triplet {
+        possible_triplets = get_triplets(&quantized_note_data);
+    }
+
+    let mut complete_beat_grid = Vec::new();
+    for (mut beat_grid, _) in quantized_note_data {
+        complete_beat_grid.append(&mut beat_grid);
+    }
+
+    let mut notes = Vec::new();
+    let mut beat_count = 0;
+    let mut i = 0;
+    let mut length = 0;
+    let mut cur_note: &Vec<(u8, u8)> = &Vec::new();
+    while i < complete_beat_grid.len() {
+        if i % divisions as usize == 0 {
+            beat_count += 1;
+            if possible_triplets.len() != 0 && possible_triplets[0] == beat_count {
+                let x = i + divisions as usize;
+                let beat_data = &Vec::from(&complete_beat_grid[i..x]);
+                notes.push(gen_triplet(beat_data, beat_type));
+                possible_triplets.pop_front();
+                i += divisions as usize;
+                length = 0;
+                continue;
             }
-            cur_note = quantized_notes[i].clone();
-            beat_length = precision_beats;
-        } else {
-            beat_length += precision_beats;
         }
+        if complete_beat_grid[i].len() != 0 {
+            if length != 0 {
+                let beat_length = length as f32 / divisions;
+                println!("{} / {} = {}", length, divisions, beat_length);
+                notes.push(gen_wrapper(cur_note, beat_length, beat_type));
+            }
+            length = 0;
+            cur_note = &complete_beat_grid[i];
+        }
+        length += 1;
+        i += 1;
     }
 
-    if cur_note.len() != 0 {
-        notes.push(gen_wrapper(&cur_note, beat_length, beat_type));
-    }
-    
     return notes;
 }
 
+/// This function finds all the triplets in a piece of music and returns a vector containing what
+/// beats they are on.
+/// 
+/// Precondition: the note data must have already been quantized.
+fn get_triplets(quantized_note_data: &Vec<(Vec<Vec<(u8, u8)>>, u8)>) -> VecDeque<u32> {
+    let mut triplets = VecDeque::new();
+    for i in 0..quantized_note_data.len() {
+        if is_possible_triplet(&quantized_note_data[i]) {
+            triplets.push_back(i as u32 + 1);
+        }
+    }
+    return triplets;
+}
+
+/// Determines if a group of notes can be a triplet.
+/// 
+/// `beat_data` is a vector of all the subdivisions of the current beat. Each element in the vector
+/// is another vector containing the key and velocity of the notes that start on that subdivision.
+fn is_possible_triplet(beat_data: &(Vec<Vec<(u8, u8)>>, u8)) -> bool {
+    let (beat_grid, note_count) = beat_data;
+    if *note_count != 3 {
+        return false;
+    }
+
+    let mut beat_length: [u8; 3]= [0, 0, 0];
+    let mut i = 0;
+    for data_point_index in 0..3 {
+        beat_length[data_point_index] += 1;
+        i +=1;
+        while i < beat_grid.len() && beat_grid[i].len() == 0 {
+            beat_length[data_point_index] += 1;
+            i += 1;
+        }
+    }
+    beat_length.sort();
+
+    return beat_length[2] - beat_length[0] <= 2 && beat_length[2] as usize > beat_grid.len() / 4;
+}
+
+/// This function generates a note wrapper for a triplet. The `duration` for the note will be
+/// the appropriate dupal counterpart. For example, eight note triplets will be stored as eigth 
+/// notes in a triplet wrapper.
+fn gen_triplet(beat_data: &Vec<Vec<(u8, u8)>>, beat_type: u8) -> NoteWrapper {
+    let mut triplet = Vec::new();
+    for div in beat_data {
+        if div.len() > 0 {
+            triplet.push(gen_wrapper(div, 0.5, beat_type));
+        }
+    }
+    return NoteWrapper::ModifiedNote(NoteModifier::Triplet(triplet));
+}
+
+/// This function generates a note wrapper for a given note or set of notes.
+/// 
+/// If `cur_note` as a length of 1, the NoteWrapper is that of a single note. Otherwize, a chord is
+/// generated made up of all the entries in `cur_note`.
+/// 
+/// `cur_note.len()` must be greater than 0.
 fn gen_wrapper(cur_note: &Vec<(u8, u8)>, beat_length: f32, beat_type: u8) -> NoteWrapper {
     let mut chord = Vec::new();
     for note_data in cur_note {
@@ -156,6 +249,7 @@ fn gen_wrapper(cur_note: &Vec<(u8, u8)>, beat_length: f32, beat_type: u8) -> Not
     return NoteWrapper::ModifiedNote(NoteModifier::Chord(chord));
 } 
 
+/// A helper function for building a `NoteWrapper`.
 fn parse_note_data((value, velocity): (u8, u8), beat_length: f32, beat_type: u8) -> NoteWrapper {
     let duration = DurationType::beat_type_map(beat_length, beat_type);
     if duration.duration == NoteDuration::NaN {
@@ -165,51 +259,92 @@ fn parse_note_data((value, velocity): (u8, u8), beat_length: f32, beat_type: u8)
     }
 }
 
-fn quantize(raw_note_data: &Vec<RawNoteData>, precision_beats: f32) -> Vec<Vec<(u8, u8)>> {
+/// This snaps all of the notes found in `track` to a grid. 
+/// 
+/// The function returns a vector of tuplets (representing beats) made up of a vector and a number. 
+/// The vector in the tuplet represents the grid of subdivisions for each beat and the number shows
+/// how many unique onsets are in that beat.
+fn quantize(
+    midi: &Midi, 
+    track: &Vec<midly::TrackEvent>, 
+    divisions: f32
+) -> Vec<(Vec<Vec<(u8, u8)>>, u8)> {
+    let mut notes = Vec::new();
+
+    let mut ticks_per_beat = midi.ticks_per_beat;
+    let mut scalar = 1;
+    if midi.ticks_per_beat % 12.0 != 0.0 {
+        scalar = 12;
+        ticks_per_beat *= 12.0;
+    }
+
+    let mut flag = true;
+    let mut raw_note_data = get_raw_note_data(track, ticks_per_beat, scalar);
     if raw_note_data.len() == 0 {
         return Vec::new();
     }
-    let total_precision_beats = get_total_precision_beats(raw_note_data, precision_beats);
-    let mut notes = vec![Vec::new(); total_precision_beats];
-    for note in raw_note_data {
-        if note.beats >= 0.0625 {
-            notes[(note.start_beat / precision_beats) as usize].push((note.value, note.velocity));
+
+    let mut cur_beat = ticks_per_beat as u32;
+    let mut note = raw_note_data.pop_front().unwrap();
+    while flag {
+        let mut beat_container = vec![Vec::new(); divisions as usize];
+        let mut note_count = 0;
+        while note.onset < cur_beat {
+            let onset = note.onset - (cur_beat - ticks_per_beat as u32);
+            let position = (onset as f32 * (1.0 / ticks_per_beat) * divisions).floor() as usize;
+            beat_container[position].push((note.key, note.vel));
+            note_count += 1;
+            if raw_note_data.is_empty() {
+                flag = false;
+                break;
+            }
+            note = raw_note_data.pop_front().unwrap();
         }
+        cur_beat += ticks_per_beat as u32;
+        notes.push((beat_container, note_count));
     }
+
+    if notes[0].0[0].len() == 0 {
+        notes[0].0[0].push((255, 0));
+        notes[0].1 += 1;
+    }
+
     return notes;
 }
 
 /// Gets the raw note data in a midi track.
-fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec<RawNoteData> {
+fn get_raw_note_data(
+    track: &Vec<midly::TrackEvent>, 
+    ticks_per_beat: f32, 
+    scalar: u32
+) -> VecDeque<RawNoteData> {
     let mut cur_time: u32 = 0;
     let mut cur_velocity: u8 = 0;
     let mut note_on_time: u32 = 0;
     let mut note_off_time: u32 = 0;
-    let mut data: Vec<RawNoteData> = Vec::new();
+    let mut data: VecDeque<RawNoteData> = VecDeque::new();
 
     for event in track {
         let delta_t: u32 = event.delta.into();
-        cur_time += delta_t;
+        cur_time += delta_t * scalar;
 
         if let midly::TrackEventKind::Midi { channel: _, message } = event.kind {
             if let midly::MidiMessage::NoteOn {key: _, vel } = message {
                 cur_velocity = vel.into();
                 note_on_time = cur_time;
-                if note_on_time - note_off_time != 0 {
-                    data.push(RawNoteData {
-                        value: 255,
-                        start_beat: note_off_time as f32 / ticks_per_beat,
-                        beats: (note_on_time - note_off_time) as f32 / ticks_per_beat,
-                        velocity: 0,
+                if note_on_time - note_off_time >= (ticks_per_beat *  0.125).ceil() as u32 {
+                    data.push_back(RawNoteData {
+                        key: 255,
+                        onset: note_off_time,
+                        vel: 0,
                     });
                 }
             }
             else if let midly::MidiMessage::NoteOff { key , vel: _ } = message {
-                data.push(RawNoteData {
-                    value: key.into(),
-                    start_beat: note_on_time as f32 / ticks_per_beat,
-                    beats: (cur_time - note_on_time) as f32 / ticks_per_beat,
-                    velocity: cur_velocity,
+                data.push_back(RawNoteData {
+                    key: key.into(),
+                    onset: note_on_time,
+                    vel: cur_velocity,
                 });
                 note_off_time = cur_time;
             }
@@ -217,17 +352,6 @@ fn get_raw_note_data(track: &Vec<midly::TrackEvent>, ticks_per_beat: f32) -> Vec
     }
 
     return data;
-}
-
-fn get_total_precision_beats(raw_note_data: &Vec<RawNoteData>, precision_beats: f32) -> usize {
-    let total_beats = raw_note_data[raw_note_data.len() - 1].start_beat;
-    let mut total_precision_beats = 0;
-    let mut cur_beat = 0.0;
-    while cur_beat <= total_beats {
-        cur_beat += precision_beats;
-        total_precision_beats += 1;
-    }
-    return total_precision_beats;
 }
 
 fn get_tied_note((value, duration, velocity): (u8, f32, u8), beat_type: u8) -> NoteModifier {

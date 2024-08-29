@@ -24,7 +24,7 @@ impl Midi {
     /// Parses through a midi file found at `dir` and returns a `Midi` object.
     pub fn parse(dir: String) -> Midi {
         let precision = duration::DEFAULT_DURATION_PRECISION;
-        return Midi::parse_with_precision(dir, precision);
+        return Midi::parse_with_precision(dir, precision, false);
     }
 
     /// Parses through a midi file found at 'dir' and returns a `Midi` object.
@@ -32,11 +32,14 @@ impl Midi {
     /// The `precision` parameter allows the user to set the degree of precision they would like
     /// when parsing. Any notes shorter than the value specified in the `precision` parameter
     /// will be grouped as a chord.
-    pub fn parse_with_precision(dir: String, precision: DurationType) -> Midi {
+    /// 
+    /// The `triplet` parameter indicated if the user wants to scan for triplets. Scanning for
+    /// triplets requires extra resources.
+    pub fn parse_with_precision(dir: String, precision: DurationType, triplet: bool) -> Midi {
         let contents = fs::read(dir).unwrap();
         let smf = Smf::parse(&contents).unwrap();
         let mut midi = Midi::new(&smf);
-        parsing::load_tracks(&mut midi, &smf, &precision);
+        parsing::load_tracks(&mut midi, &smf, &precision, triplet);
         return midi;
     }
 
